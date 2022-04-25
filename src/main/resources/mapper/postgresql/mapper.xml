@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="mapper.postgresql.mapper">
+
+    <select id="getUserList" resultType="com.approvalSystem.vo.User">
+        select
+            user_key    as userKey,
+            id			as id,
+            user_name   as userName
+        from usertable
+        where 1 = 1
+          <if test="id != null and pw != null">
+              and id = #{id}
+              and pw = #{pw}
+              LIMIT 1
+          </if>
+    </select>
+
+    <select id="getDocTypeList" resultType="com.approvalSystem.vo.DocumentType">
+        select
+            type_key as typeKey,
+            type_name as typeName
+        from document_type
+    </select>
+
+    <select id="getDocumentList" parameterType="com.approvalSystem.vo.sc.SCDocument" resultType="com.approvalSystem.vo.Document">
+        select
+            d.doc_key 		as docKey,
+            dt.type_key 	as docTypeKey,
+            dt.type_name 	as docTypeName,
+            d.title  		as title,
+            d.contents 		as contents,
+            (select user_name from usertable u where u.user_key = d.cre_user) 	as creUserName,
+            d.state 		as state,
+            to_char(d.cre_date, 'YYYY-MM-DD HH24:MI:SS') 		as creDate,
+            to_char(d.approval_date, 'YYYY-MM-DD HH24:MI:SS')   as approvalDate
+        from documents d
+             inner join document_type dt on d.doc_type = dt.type_key
+            <if test="listType == 'INBOX'">
+                inner join approval_management am  on d.doc_key = am.doc_key
+                inner join m_doc_approval mda on d.doc_key = mda.doc_key
+            </if>
+        where d.state = 'I'
+            <if test="listType == 'INBOX' and approver != null">
+                and am.approver = #{approver}
+                and am.state = 'W'
+                and mda.priority_order = am.priority
+                and mda.delete_yn = false
+            </if>
+            <if test="listType == 'OUTBOX' and creUserKey != null">
+                and d.cre_user = #{creUserKey}
+            </if>
+            order by d.cre_date
+    </select>
+
+    <select id="getDocumentArchive" resultType="com.approvalSystem.vo.Document">
+        (select
+            d.doc_key 		as docKey,
+            dt.type_key 	as docTypeKey,
+            dt.type_name 	as docTypeName,
+            d.title  		as title,
+            d.contents 		as contents,
+            (select user_name from usertable u where u.user_key = d.cre_user) 	as creUserName,
+            d.state 		as state,
+            to_char(d.cre_date, 'YYYY-MM-DD HH24:MI:SS') 		as creDate,
+            to_char(d.approval_date, 'YYYY-MM-DD HH24:MI:SS')   as approvalDate
+        from documents d
+                 inner join document_type dt on d.doc_type = dt.type_key
+        where d.state in ('C', 'R')
+          and d.cre_user = #{userKey})
+        union
+        (select
+            d.doc_key 		as docKey,
+            dt.type_key 	as docTypeKey,
+            dt.type_name 	as docTypeName,
+            d.title  		as title,
+            d.contents 		as contents,
+            (select user_name from usertable u where u.user_key = d.cre_user) 	as creUserName,
+            d.state 		as state,
+            to_char(d.cre_date, 'YYYY-MM-DD HH24:MI:SS') 		as creDate,
+            to_char(d.approval_date, 'YYYY-MM-DD HH24:MI:SS')   as approvalDate
+        from documents d
+                 inner join document_type dt on d.doc_type = dt.type_key
+                 inner join approval_management am  on d.doc_key = am.doc_key
+        where d.state in ('C', 'R')
+          and am.approver = #{userKey})
+        order by creDate
+    </select>
+
+    <select id="getRemainApproverCnt" resultType="Integer">
+        select
+            count(1)
+        from approval_management am
+        inner join documents d on d.doc_key = am.doc_key
+        where am.state = 'W'
+            and d.state = 'I'
+            and d.doc_key = #{docKey}
+    </select>
+
+    <insert id="saveDocument" parameterType="com.approvalSystem.vo.Document" useGeneratedKeys="true" keyProperty="docKey">
+        insert into documents
+            (doc_type, title, contents, cre_user, cre_date, state, approval_date)
+        values(
+            #{docTypeKey},
+            #{title},
+            #{contents},
+            #{creUserKey},
+            now(),
+            'I',
+            now()
+        )
+    </insert>
+
+    <insert id="saveApprovalMgmtList"  parameterType="com.approvalSystem.vo.ApprovalMgmt">
+        insert into approval_management
+            (doc_key, priority, approver, state)
+        values
+            <foreach collection="approvalMgmtList" item="item" separator=",">
+                (
+                    #{item.docKey},
+                    #{item.priority},
+                    #{item.approver},
+                    'W'
+                )
+            </foreach>
+    </insert>
+
+    <insert id="saveMappingDocApproval">
+        insert into m_doc_approval
+            (doc_key, priority_order, delete_yn)
+        values(
+            #{docKey},
+            0,
+            false
+        )
+    </insert>
+
+    <update id="updateMappingDocApproval">
+        update m_doc_approval
+        set
+            <if test="delete_yn != null">
+                delete_yn = #{deleteYn},
+            </if>
+            priority_order = priority_order + 1
+        where doc_key = #{docKey}
+
+    </update>
+
+    <update id="updateDocument" parameterType="com.approvalSystem.vo.Document">
+        update documents
+        set
+            state = #{state},
+            approval_date = now()
+        where doc_key = #{docKey}
+    </update>
+
+    <update id="updateApprovalMgmt" parameterType="com.approvalSystem.vo.ApprovalMgmt">
+        update approval_management
+        set
+            state = #{state}, -- C 또는 R
+            opinion = #{opinion},
+            mod_date = now()
+        where doc_key = #{docKey}
+          and approver = #{approver}
+    </update>
+
+    
+</mapper>
